@@ -6,6 +6,11 @@ import bcrypt from "bcrypt";
 import session from "express-session";
 import passport from "passport";
 import { Strategy } from "passport-local";
+import GoogleStrategy from "passport-google-oauth2";
+
+const saltRounds = 10;
+const app = express();
+const port = 3000;
 
 dotenv.config();
 
@@ -24,10 +29,6 @@ async function getUsers() {
 
   return result.rows;
 }
-
-const saltRounds = 10;
-const app = express();
-const port = 3000;
 
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static("public"));
@@ -65,6 +66,31 @@ app.get("/secrets", (req, res) => {
     res.redirect("/login");
   }
 });
+
+app.get(
+  "/auth/google",
+  passport.authenticate("google", {
+    scope: ["profile", "email"],
+  })
+);
+
+app.get(
+  "/auth/google/secrets",
+  passport.authenticate("google", {
+    successRedirect: "/secrets",
+    failureRedirect: "/login",
+  })
+);
+
+app.get("/logout", (req,res)=>{
+  req.logout((err)=>{
+    if(err){
+      console.log(err);
+    }else{
+      res.redirect("/");
+    }
+  })
+})
 
 app.post("/register", async (req, res) => {
   const username = req.body.username;
@@ -104,6 +130,7 @@ app.post(
 );
 
 passport.use(
+  "local",
   new Strategy(async function verify(username, password, cb) {
     try {
       const users = await getUsers();
@@ -132,6 +159,40 @@ passport.use(
   })
 );
 
+passport.use(
+  "google",
+  new GoogleStrategy(
+    {
+      clientID: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      callbackURL: "http://localhost:3000/auth/google/secrets",
+      userProfileURL: "https://www.googleapis.com/oauth2/v3/userinfo",
+    },
+    async (accessToken, refreshToken, profile, cb) => {
+      console.log(profile);
+
+      try {
+        const result = await db.query("SELECT * FROM users WHERE email = $1", [
+          profile.email,
+        ]);
+
+        if (result.rows.length === 0) {
+          const newUser = await db.query(
+            "INSERT INTO users (email,password) VALUES ($1, $2)",
+            [profile.email, "google"]
+          );
+          cb(null, newUser.rows[0]);
+        } else {
+          // Already existing user
+          cb(null, result.rows[0]);
+        }
+      } catch (error) {
+        cb(error);
+      }
+    }
+  )
+);
+
 passport.serializeUser((user, cb) => {
   cb(null, user);
 });
@@ -143,8 +204,5 @@ passport.deserializeUser((user, cb) => {
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
-
-
-
 
 
